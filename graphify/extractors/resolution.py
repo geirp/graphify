@@ -3135,15 +3135,28 @@ def _resolve_python_namespace_dir(module_name: str, current_path: Path, root: Pa
     return None
 
 def _python_top_level_function_bodies(path: Path, root_node, source: bytes) -> list[tuple[str, object]]:
+    # The generic extractor salts ids for declarations whose names normalize to
+    # the same id (#3302). This second call-symbol pass MUST use the same policy:
+    # _make_id(stem, "_main") == _make_id(stem, "main"), but the first pass
+    # already emitted distinct function nodes. Otherwise _main's imported calls
+    # become EXTRACTED edges from main (a valid but different node).
+    # Local import breaks the engine -> resolution module import cycle.
+    from graphify.extractors.engine import (
+        _python_pre_scan_underscore_collisions, _underscore_salted_nid,
+    )
+
     bodies: list[tuple[str, object]] = []
     stem = _file_stem(path)
+    collision_groups = _python_pre_scan_underscore_collisions(root_node, source, stem)
     for node in root_node.children:
         if node.type != "function_definition":
             continue
         name_node = node.child_by_field_name("name")
         body = node.child_by_field_name("body")
         if name_node is not None and body is not None:
-            bodies.append((_make_id(stem, _read_text(name_node, source)), body))
+            name = _read_text(name_node, source)
+            nid = _underscore_salted_nid(_make_id(stem, name), name, collision_groups)
+            bodies.append((nid, body))
     return bodies
 
 def _python_call_identifier(node, source: bytes) -> str | None:
